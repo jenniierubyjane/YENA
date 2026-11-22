@@ -1,0 +1,79 @@
+<div id="previa-acesso-yena">
+  <style>
+    #previa-acesso-yena { font: 15px/1.5 'Segoe UI', sans-serif; color: light-dark(#302644,#f4edff); background: light-dark(#f4eff9,#221b31); padding: clamp(16px,4vw,38px); border-radius: 18px; }
+    #previa-acesso-yena header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:26px; }
+    #previa-acesso-yena strong { letter-spacing:.12em; }
+    #previa-acesso-yena section { max-width:530px; margin:auto; padding:clamp(16px,4vw,28px); background:light-dark(#fff,#302644); border-radius:14px; }
+    #previa-acesso-yena h2 { margin:0 0 6px; font:600 26px/1.2 'Segoe UI',sans-serif; }
+    #previa-acesso-yena p { margin:0 0 14px; }
+    #previa-acesso-yena form, #previa-acesso-yena label { display:grid; gap:8px; }
+    #previa-acesso-yena form { gap:13px; }
+    #previa-acesso-yena button, #previa-acesso-yena input { font:inherit; border:1px solid light-dark(#d8cde6,#756389); border-radius:8px; padding:9px 12px; min-height:44px; box-sizing:border-box; }
+    #previa-acesso-yena input { width:100%; background:light-dark(#fff,#241c32); color:inherit; }
+    #previa-acesso-yena button { background:light-dark(#eee7f7,#48365d); color:inherit; }
+    #previa-acesso-yena button[type=submit] { color:#fff; background:#584177; }
+    #previa-acesso-yena .accounts { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+    #previa-acesso-yena ul { padding:0; margin:16px 0; list-style:none; }
+    #previa-acesso-yena li { padding:10px 0; border-bottom:1px solid light-dark(#e7dfef,#59476d); }
+  </style>
+  <header><strong>YENA</strong><span>Prévia interativa</span></header>
+  <section data-screen="login" aria-label="Entrada">
+    <h2>Bem-vindo à YENA</h2>
+    <p>Acesse sua conta para acompanhar seus orçamentos.</p>
+    <form>
+      <label>E-mail<input name="email" type="email" required autocomplete="off" placeholder="Seu e-mail"></label>
+      <label>Senha<input name="password" type="password" required autocomplete="off" placeholder="Sua senha"></label>
+      <button type="submit" class="cursor-interaction">Entrar</button>
+      <div data-error role="alert" hidden>Escolha uma das contas de teste abaixo.</div>
+    </form>
+    <div class="accounts" aria-label="Contas de teste">
+      <button type="button" class="cursor-interaction" data-account="cliente">Usar conta de cliente</button>
+      <button type="button" class="cursor-interaction" data-account="admin">Usar conta de administrador</button>
+    </div>
+  </section>
+  <section data-screen="cliente" aria-label="Área do cliente" hidden>
+    <h2>Olá, Ana!</h2>
+    <p>Meus orçamentos</p>
+    <ul><li>Monitoramento residencial · R$ 350/mês · Em análise</li></ul>
+    <button type="button" class="cursor-interaction" data-back>Sair</button>
+  </section>
+  <section data-screen="admin" aria-label="Painel administrativo" hidden>
+    <h2>Painel administrativo</h2>
+    <p>Clientes e orçamentos</p>
+    <ul><li>Ana Silva · Monitoramento residencial · Em análise</li><li>Bruno Costa · Monitoramento residencial · Aprovado</li></ul>
+    <button type="button" class="cursor-interaction" data-back>Sair</button>
+  </section>
+  <script>
+    (() => {
+      const root = document.getElementById('previa-acesso-yena');
+      const form = root.querySelector('form');
+      const email = form.elements.namedItem('email');
+      const password = form.elements.namedItem('password');
+      const error = root.querySelector('[data-error]');
+      const testPassword = 'demonstracao';
+      const accounts = { cliente: 'ana@yena.example', admin: 'admin@yena.example' };
+      function show(screen) {
+        root.querySelectorAll('[data-screen]').forEach(panel => { panel.hidden = panel.dataset.screen !== screen; });
+      }
+      root.querySelectorAll('[data-account]').forEach(button => button.addEventListener('click', () => {
+        email.value = accounts[button.dataset.account];
+        password.value = testPassword;
+        error.hidden = true;
+        form.querySelector('[type=submit]').focus();
+      }));
+      form.addEventListener('submit', event => {
+        event.preventDefault();
+        const role = Object.keys(accounts).find(key => accounts[key] === email.value.trim().toLowerCase());
+        if (!role || password.value !== testPassword) { error.hidden = false; return; }
+        show(role);
+        root.querySelector('[data-screen="' + role + '"] [data-back]').focus();
+      });
+      root.querySelectorAll('[data-back]').forEach(button => button.addEventListener('click', () => {
+        form.reset();
+        error.hidden = true;
+        show('login');
+        root.querySelector('[data-account]').focus();
+      }));
+    })();
+  </script>
+</div>
