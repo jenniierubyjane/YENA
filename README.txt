@@ -21,6 +21,16 @@ O acesso permanece igual ao reiniciar: a inicialização preserva o .env.
 O botão Sair encerra a sessão. Para entrar novamente, use as mesmas credenciais.
 Após alterar as credenciais no .env, reinicie npm.cmd start para aplicá-las.
 
+Ao aprovar um orçamento vinculado a um cliente, a YENA envia um convite
+para o e-mail informado no cadastro. O cliente confirma a conta e cria
+a senha no portal. Contas já ativas dispensam novo convite.
+
+No servidor, configure APP_ORIGIN com o endereço público HTTPS da YENA,
+RESEND_API_KEY com a chave do Resend e YENA_EMAIL_FROM com um endereço
+remetente de domínio verificado no Resend. Reinicie o servidor após
+alterar as variáveis. Para reenviar, abra Convites e use Enviar por e-mail.
+Cada novo convite substitui o anterior para esse cliente.
+
 No painel administrativo, abra Convites, escolha um cliente cadastrado e gere
 um link. O cliente cria a senha pelo link e entra com o e-mail cadastrado.
 O convite vale por 7 dias e só pode ser usado uma vez. Para testar o acesso

@@ -264,7 +264,7 @@ document.addEventListener('click',async event=>{
  if(action==='invites-retry'){await discoverData();await loadInvites();return;}
  if(action==='invite-create'&&c){
   const account=accounts?.find(item=>item.clientId===id);
-  openDialog('Gerar convite',`<input type="hidden" name="clientId" value="${esc(id)}"><label class="field">E-mail de ${esc(c.name)} <input name="email" type="email" required maxlength="120" value="${esc(account?.email||c.contact)}"></label><p class="error" role="alert" hidden></p>`,`${closeButton}<button type="submit" class="button">Gerar link</button>`,'invite-form');
+  openDialog('Gerar convite',`<input type="hidden" name="clientId" value="${esc(id)}"><label class="field">E-mail de ${esc(c.name)} <input name="email" type="email" required maxlength="120" value="${esc(account?.email||c.contact)}"></label><p>O envio por e-mail usa o contato do cadastro (${esc(c.contact)}).</p><p class="error" role="alert" hidden></p>`,`${closeButton}<button type="submit" class="button">Gerar link</button><button type="submit" class="button secondary" name="sendEmail" value="true" formnovalidate>Enviar por e-mail</button>`,'invite-form');
   return;
  }
  if(action==='invite-webcam'){
@@ -340,24 +340,30 @@ document.addEventListener('submit',async event=>{
  }
  if(authState.authenticated&&!isClient()&&['invite-form','quote-status-form'].includes(submitted.id)){
   event.preventDefault();
-  const fields=Object.fromEntries(new FormData(submitted));
-  const button=submitted.querySelector('[type="submit"]'),status=submitted.querySelector('[role="alert"]');
-  button.disabled=true;
+  const fields=Object.fromEntries(new FormData(submitted,event.submitter));
+  const buttons=[...submitted.querySelectorAll('[type="submit"]')],status=submitted.querySelector('[role="alert"]');
+  if(buttons.some(button=>button.disabled))return;
+  buttons.forEach(button=>button.disabled=true);
+  status.hidden=true;
   try{
    if(submitted.id==='invite-form'){
-    const {url}=await apiJSON('/api/invites',{method:'POST',body:JSON.stringify(fields)});
-    openDialog('Convite pronto',`<p>Envie o link ao cliente para que ele crie sua senha. Para testar neste computador, abra o link em uma janela anônima.</p><label class="field">Link do convite <input id="invite-link" readonly value="${esc(url)}"></label>`,`${closeButton}<button type="button" class="button" data-action="invite-copy">Copiar link</button>`);
+    const {url,emailed}=await apiJSON('/api/invites',{method:'POST',body:JSON.stringify({...fields,sendEmail:fields.sendEmail==='true'})});
+    if(emailed){
+     dialog.close();
+     toast('Convite enviado ao e-mail cadastrado.');
+    }else openDialog('Convite pronto',`<p>Envie o link ao cliente para que ele crie sua senha. Para testar neste computador, abra o link em uma janela anônima.</p><label class="field">Link do convite <input id="invite-link" readonly value="${esc(url)}"></label>`,`${closeButton}<button type="button" class="button" data-action="invite-copy">Copiar link</button>`);
     await loadInvites();
    }else{
-    await apiJSON('/api/quotes/'+fields.id+'/status',{method:'PUT',body:JSON.stringify({status:fields.status})});
+    const result=await apiJSON('/api/quotes/'+fields.id+'/status',{method:'PUT',body:JSON.stringify({status:fields.status})});
     const quote=savedQuotes.find(item=>item.id===fields.id);
     if(quote)quote.snapshot.status=fields.status;
     dialog.close();
     document.querySelector('#quote-history').innerHTML=quoteHistory();
-    toast('Status atualizado.');
+    if(result.message)openDialog('Orçamento aprovado',`<p>${esc(result.message)}</p>`,closeButton);
+    else toast(result.inviteEmail==='sent'?'Orçamento aprovado e convite enviado ao e-mail cadastrado.':'Status atualizado.');
    }
   }catch(error){status.hidden=false;status.textContent=error.message;}
-  finally{button.disabled=false;}
+  finally{buttons.forEach(button=>button.disabled=false);}
   return;
  }
  if(event.target.getAttribute('id')==='login-form'){event.preventDefault();const form=event.target,button=form.querySelector('[type="submit"]');if(button.disabled)return;button.disabled=true;button.textContent='Entrando…';const payload={username:form.elements.username.value.trim(),password:form.elements.password.value};form.elements.password.value='';document.querySelector('#login-error').hidden=true;try{await apiJSON('/api/session',{method:'POST',body:JSON.stringify(payload)});payload.password='';if(!await refreshSession())throw new Error('Não foi possível manter sua sessão. Verifique se os cookies estão habilitados.');render();main.focus({preventScroll:true});toast('Acesso autenticado.');}catch(error){payload.password='';const el=document.querySelector('#login-error');el.textContent=error.message;el.hidden=false;document.querySelector('#login-password').focus();}finally{button.disabled=false;button.textContent='Entrar';}return;}
