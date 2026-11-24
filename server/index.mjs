@@ -6,6 +6,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {AIError,DEFAULT_MODEL,completeWithDeepSeek,validateMessages} from './deepseek.mjs';
 import {createMySQLRepository} from './database.mjs';
 import {createAuth,hashClientPassword,inviteDigest} from './auth.mjs';
+import {createInviteMailer} from './invite-email.mjs';
 import {calculateQuote,validateClient} from '../dist/core.mjs';
 
 const dist=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../dist');
@@ -19,7 +20,7 @@ async function readJSON(req){
   for await(const chunk of req){length+=chunk.length;if(length>65536)throw new AIError(413,'too_large','A mensagem excede o limite permitido.');chunks.push(chunk);}
   try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new AIError(400,'invalid_json','Não foi possível ler a mensagem.');}
 }
-export function createYenaServer({apiKey=process.env.DEEPSEEK_API_KEY,model=process.env.DEEPSEEK_MODEL||DEFAULT_MODEL,fetchImpl=globalThis.fetch,timeoutMs=35000,rateLimit=10,now=Date.now,repository=createMySQLRepository(),adminUsername=process.env.YENA_ADMIN_USER||'admin',adminPassword=process.env.YENA_ADMIN_PASSWORD,publicOrigin=process.env.APP_ORIGIN||null}={}){
+export function createYenaServer({apiKey=process.env.DEEPSEEK_API_KEY,model=process.env.DEEPSEEK_MODEL||DEFAULT_MODEL,fetchImpl=globalThis.fetch,timeoutMs=35000,rateLimit=10,now=Date.now,repository=createMySQLRepository(),adminUsername=process.env.YENA_ADMIN_USER||'admin',adminPassword=process.env.YENA_ADMIN_PASSWORD,publicOrigin=process.env.APP_ORIGIN||null,sendInvite=createInviteMailer({apiKey:process.env.RESEND_API_KEY,from:process.env.YENA_EMAIL_FROM})}={}){
   let calls=[],active=false;
   const activationAttempts=new Map();
   const quoteAttempts=new Map();
@@ -33,6 +34,19 @@ export function createYenaServer({apiKey=process.env.DEEPSEEK_API_KEY,model=proc
   const auth=createAuth({username:adminUsername,password:adminPassword,now,findClient:repository?.findAccount?.bind(repository)});
   const publicURL=publicOrigin?new URL(publicOrigin):null;
   if(publicURL&&(publicURL.protocol!=='https:'||publicURL.pathname!=='/'||publicURL.search||publicURL.hash||publicURL.username||publicURL.password))throw new Error('APP_ORIGIN deve ser uma origem HTTPS sem caminho, parâmetros ou credenciais.');
+  async function issueInvite(clientId,email,origin){
+    const address=typeof email==='string'?email.trim().toLowerCase():'';
+    if(address.length>120||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)||address===adminUsername.toLowerCase())throw new AIError(400,'invalid_email','Informe um e-mail válido para o cliente.');
+    const token=randomBytes(32).toString('hex');
+    if(!await repository.inviteClient(clientId,address,inviteDigest(token),now()+7*86400000))throw new AIError(409,'invite_conflict','Este cliente já tem uma conta ativa ou o e-mail está em uso.');
+    return {email:address,url:origin+'/#convite/'+token};
+  }
+  async function emailInvite(clientId,contact){
+    if(!publicURL||!sendInvite)throw new AIError(503,'email_not_configured','Configure o serviço de e-mail e o endereço público HTTPS da YENA.');
+    const invite=await issueInvite(clientId,contact,publicURL.origin);
+    try{await sendInvite(invite);}
+    catch{throw new AIError(502,'email_failed','O envio do convite não foi confirmado. Tente novamente em Convites.');}
+  }
   const server=http.createServer(async(req,res)=>{
     try{
       const allowedHosts=publicURL?[publicURL.host]:[`127.0.0.1:${server.address().port}`,`localhost:${server.address().port}`];
@@ -87,18 +101,19 @@ export function createYenaServer({apiKey=process.env.DEEPSEEK_API_KEY,model=proc
         if(!repository)throw new AIError(503,'database_unavailable','MySQL não configurado.');
         if(req.method==='GET')return json(res,200,{accounts:await repository.listAccounts()});
         if(['POST','PUT'].includes(req.method)){
-          const {clientId,email,webcamEnabled}=await readJSON(req)||{};
+          const {clientId,email,webcamEnabled,sendEmail}=await readJSON(req)||{};
           if(typeof clientId!=='string'||!/^[a-f0-9-]{36}$/i.test(clientId))throw new AIError(400,'invalid_client','Selecione um cliente válido.');
           if(req.method==='PUT'){
             if(typeof webcamEnabled!=='boolean')throw new AIError(400,'invalid_fields','Confira a permissão da webcam.');
             if(!await repository.setWebcam(clientId,webcamEnabled))throw new AIError(404,'not_found','Conta não encontrada.');
             return json(res,200,{success:true});
           }
-          const address=typeof email==='string'?email.trim().toLowerCase():'';
-          if(address.length>120||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)||address===adminUsername.toLowerCase())throw new AIError(400,'invalid_email','Informe um e-mail válido para o cliente.');
-          const token=randomBytes(32).toString('hex');
-          if(!await repository.inviteClient(clientId,address,inviteDigest(token),now()+7*86400000))throw new AIError(409,'invite_conflict','Este cliente já tem uma conta ativa ou o e-mail está em uso.');
-          return json(res,201,{url:origin+'/#convite/'+token});
+          if(sendEmail===true){
+            await emailInvite(clientId,await repository.clientContact(clientId));
+            return json(res,201,{emailed:true});
+          }
+          const {url}=await issueInvite(clientId,email,origin);
+          return json(res,201,{url});
         }
         throw new AIError(405,'method_not_allowed','Método não permitido.');
       }
@@ -107,6 +122,21 @@ export function createYenaServer({apiKey=process.env.DEEPSEEK_API_KEY,model=proc
         if(!repository)throw new AIError(503,'database_unavailable','MySQL não configurado.');
         const {status}=await readJSON(req)||{};
         if(!['Em análise','Orçamento enviado','Aprovado'].includes(status))throw new AIError(400,'invalid_status','Selecione um status válido.');
+        if(status==='Aprovado'){
+          const approval=await repository.approveQuote(quoteStatus[1]);
+          if(!approval)throw new AIError(404,'not_found','Orçamento não encontrado.');
+          if(approval.changed&&approval.clientId&&!approval.active){
+            try{
+              await emailInvite(approval.clientId,approval.contact);
+              return json(res,200,{success:true,inviteEmail:'sent'});
+            }catch(error){
+              const message=error instanceof AIError?error.message:'Não foi possível preparar o convite. Tente novamente em Convites.';
+              return json(res,200,{success:true,inviteEmail:'failed',message});
+            }
+          }
+          if(approval.changed&&!approval.clientId)return json(res,200,{success:true,inviteEmail:'skipped',message:'O orçamento aprovado está sem vínculo com um cliente.'});
+          return json(res,200,{success:true});
+        }
         if(!await repository.updateQuoteStatus(quoteStatus[1],status))throw new AIError(404,'not_found','Orçamento não encontrado.');
         return json(res,200,{success:true});
       }

@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {get,request} from 'node:http';
 import {createYenaServer} from '../server/index.mjs';
+import {createInviteMailer} from '../server/invite-email.mjs';
+import {inviteDigest} from '../server/auth.mjs';
 import {completeWithDeepSeek,validateMessages,SYSTEM_PROMPT} from '../server/deepseek.mjs';
 
 const fakeKey='test-only-credential-not-a-real-key';
@@ -52,6 +54,69 @@ test('aceita APP_ORIGIN com barra final e o cabeçalho Origin sem barra',async()
   });
   assert.equal(response.statusCode,200);
   assert.match(response.headers['set-cookie'][0],/; Secure$/);
+ }finally{
+  server.closeAllConnections();
+  await new Promise(resolve=>server.close(resolve));
+ }
+});
+test('aprovação envia convite ao contato cadastrado e permite reenvio após falha',async()=>{
+ const publicOrigin='https://yena.example';
+ const id='f5f318fb-f8af-41b6-b92f-49af5b66f540';
+ const contact='cliente@example.com';
+ let changed=true,digest,providerStatus=200,active=false;
+ const deliveries=[];
+ const repository={
+  async approveQuote(){const result={clientId:id,contact,changed,active};changed=false;return result;},
+  async clientContact(){return contact;},
+  async inviteClient(clientId,email,hash){
+   assert.equal(clientId,id);
+   assert.equal(email,contact);
+   digest=hash;
+   return true;
+  },
+  async activateClient(hash){if(hash!==digest||active)return false;active=true;return true;}
+ };
+ const sendInvite=createInviteMailer({apiKey:fakeKey,from:'YENA <conta@yena.example>',fetchImpl:async(url,options)=>{
+  assert.equal(url,'https://api.resend.com/emails');
+  assert.equal(options.headers.Authorization,`Bearer ${fakeKey}`);
+  deliveries.push(JSON.parse(options.body));
+  return new Response(null,{status:providerStatus});
+ }});
+ const server=createYenaServer({publicOrigin,repository,sendInvite,adminUsername:testUsername,adminPassword:testPassword});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ let cookie;
+ const call=(method,path,body)=>new Promise((resolve,reject)=>{
+  const req=request({hostname:'127.0.0.1',port:server.address().port,path,method,
+   headers:{Host:'yena.example',Origin:publicOrigin,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})}
+  },async res=>{
+   const chunks=[];
+   for await(const chunk of res)chunks.push(chunk);
+   resolve({status:res.statusCode,headers:res.headers,body:JSON.parse(Buffer.concat(chunks))});
+  });
+  req.on('error',reject);
+  req.end(JSON.stringify(body));
+ });
+ const approve=()=>call('PUT',`/api/quotes/${id}/status`,{status:'Aprovado'});
+ try{
+  const login=await call('POST','/api/session',{username:testUsername,password:testPassword});
+  cookie=login.headers['set-cookie'][0].split(';')[0];
+  providerStatus=500;
+  const failed=await approve();
+  assert.equal(failed.status,200);
+  assert.equal(failed.body.inviteEmail,'failed');
+  assert.deepEqual((await approve()).body,{success:true});
+  assert.equal(deliveries.length,1);
+  providerStatus=200;
+  assert.deepEqual((await call('POST','/api/invites',{clientId:id,email:'outro@example.com',sendEmail:true})).body,{emailed:true});
+  assert.deepEqual(deliveries[1].to,[contact]);
+  const token=deliveries[1].text.match(/https:\/\/yena\.example\/#convite\/([a-f0-9]{64})/)[1];
+  assert.equal(inviteDigest(token),digest);
+  const activate=()=>call('POST','/api/activate',{token,password:'Yena-Test-2026'});
+  assert.equal((await activate()).status,200);
+  assert.equal((await activate()).status,400);
+  changed=true;
+  assert.deepEqual((await approve()).body,{success:true});
+  assert.equal(deliveries.length,2);
  }finally{
   server.closeAllConnections();
   await new Promise(resolve=>server.close(resolve));

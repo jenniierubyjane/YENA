@@ -22,6 +22,20 @@ export class MySQLRepository {
   const [result]=await this.pool.execute("UPDATE quotes SET snapshot=JSON_SET(snapshot,'$.status',?) WHERE id=?",[status,id]);
   return result.affectedRows>0;
  }
+ async approveQuote(id){
+  const [rows]=await this.pool.execute(`SELECT q.client_id AS clientId,c.contact,
+   a.password_hash IS NOT NULL AS active
+   FROM quotes q LEFT JOIN clients c ON c.id=q.client_id
+   LEFT JOIN client_accounts a ON a.client_id=c.id WHERE q.id=?`,[id]);
+  if(!rows.length)return null;
+  const [result]=await this.pool.execute(`UPDATE quotes SET snapshot=JSON_SET(snapshot,'$.status','Aprovado')
+   WHERE id=? AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(snapshot,'$.status')),'')<>'Aprovado'`,[id]);
+  return {...rows[0],changed:result.affectedRows===1};
+ }
+ async clientContact(clientId){
+  const [rows]=await this.pool.execute('SELECT contact FROM clients WHERE id=?',[clientId]);
+  return rows[0]?.contact;
+ }
  async requestQuote(client,snapshot){
   const connection=await this.pool.getConnection();
   const clientId=randomUUID(),quoteId=randomUUID();
